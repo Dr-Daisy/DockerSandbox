@@ -1,12 +1,17 @@
 [project]
 name = "docker-gui"
 version = "0.1.0"
-description = "Add your description here"
+description = "Docker Container GUI Manager for Windows"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
     "pyside6>=6.11.0",
+    "pyte>=0.8.2",
+    "pywinpty>=3.0.3",
 ]
+
+[project.scripts]
+docker-gui = "main:main"
 
 [dependency-groups]
 dev = [
