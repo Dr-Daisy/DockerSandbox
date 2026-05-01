@@ -5,6 +5,7 @@ description = "Docker Container GUI Manager for Windows"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "pillow>=12.2.0",
     "pyside6>=6.11.0",
     "pyte>=0.8.2",
     "pywinpty>=3.0.3",

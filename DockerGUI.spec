@@ -9,11 +9,17 @@ for pattern in ['*.dll', '*.exe']:
     for f in glob.glob(os.path.join(winpty_dir, pattern)):
         winpty_binaries.append((f, 'winpty'))
 
+# Include logo assets
+assets_dir = os.path.join(os.getcwd(), 'assets')
+datas = []
+if os.path.exists(assets_dir):
+    datas.append((assets_dir, 'assets'))
+
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=winpty_binaries,
-    datas=[],
+    datas=datas,
     hiddenimports=[
         'docker_gui',
         'docker_gui.theme',
@@ -26,11 +32,11 @@ a = Analysis(
         'docker_gui.container_card',
         'docker_gui.create_dialog',
         'docker_gui.main_window',
-        'pyte',
-        'pyte.screens',
-        'pyte.streams',
         'winpty',
         'winpty.ptyprocess',
+        'PIL',
+        'PIL._imagingtk',
+        'PIL._tkinter_finder',
     ],
     hookspath=[],
     hooksconfig={},
@@ -46,7 +52,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='DockerGUI',
+    name='DockerSandbox',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -57,6 +63,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='assets/logo.ico',
 )
 
 coll = COLLECT(
@@ -66,5 +73,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='DockerGUI',
+    name='DockerSandbox',
 )

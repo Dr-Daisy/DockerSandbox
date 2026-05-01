@@ -47,6 +47,7 @@ class PtySession(QObject):
             log(f"[PTY] cmdline: {cmdline}")
         except Exception as e:
             import traceback as _tb
+
             err_detail = _tb.format_exc()
             log(f"[PTY] spawn error: {e}\n{err_detail}")
             if self._shell_attempt == "bash":
@@ -91,13 +92,32 @@ class PtySession(QObject):
         if ctrl:
             ch = key.lower()
             ctrl_map = {
-                'a': '\x01', 'b': '\x02', 'c': '\x03', 'd': '\x04',
-                'e': '\x05', 'f': '\x06', 'g': '\x07', 'h': '\x08',
-                'i': '\x09', 'j': '\x0a', 'k': '\x0b', 'l': '\x0c',
-                'm': '\x0d', 'n': '\x0e', 'o': '\x0f', 'p': '\x10',
-                'q': '\x11', 'r': '\x12', 's': '\x13', 't': '\x14',
-                'u': '\x15', 'v': '\x16', 'w': '\x17', 'x': '\x18',
-                'y': '\x19', 'z': '\x1a',
+                "a": "\x01",
+                "b": "\x02",
+                "c": "\x03",
+                "d": "\x04",
+                "e": "\x05",
+                "f": "\x06",
+                "g": "\x07",
+                "h": "\x08",
+                "i": "\x09",
+                "j": "\x0a",
+                "k": "\x0b",
+                "l": "\x0c",
+                "m": "\x0d",
+                "n": "\x0e",
+                "o": "\x0f",
+                "p": "\x10",
+                "q": "\x11",
+                "r": "\x12",
+                "s": "\x13",
+                "t": "\x14",
+                "u": "\x15",
+                "v": "\x16",
+                "w": "\x17",
+                "x": "\x18",
+                "y": "\x19",
+                "z": "\x1a",
             }
             if ch in ctrl_map:
                 self.write(ctrl_map[ch])
@@ -106,22 +126,28 @@ class PtySession(QObject):
 
     def send_arrow(self, direction: str):
         arrows = {
-            'up': '\x1b[A',
-            'down': '\x1b[B',
-            'right': '\x1b[C',
-            'left': '\x1b[D',
+            "up": "\x1b[A",
+            "down": "\x1b[B",
+            "right": "\x1b[C",
+            "left": "\x1b[D",
         }
         if direction in arrows:
             self.write(arrows[direction])
 
     def send_backspace(self):
-        self.write('\x7f')
+        self.write("\x7f")
 
     def send_intr(self):
-        self.write('\x03')
+        self.write("\x03")
 
     def send_eof(self):
-        self.write('\x04')
+        self.write("\x04")
 
     def stop(self):
         self._running = False
+        if self._proc:
+            try:
+                self._proc.close()
+            except Exception as e:
+                log(f"[PTY] close error: {e}")
+            self._proc = None

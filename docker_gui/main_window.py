@@ -1,9 +1,11 @@
+import os
+import shutil
 import traceback
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QDialog, QTabWidget, QMessageBox, QScrollArea, QSizePolicy, QPushButton
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QProcess
 
 from .theme import LIGHT_STYLE
 from .logger import log
@@ -16,7 +18,7 @@ from .terminal_tab import TerminalTab
 class DockerManager(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Docker Container Manager")
+        self.setWindowTitle("DockerSandbox")
         self.setMinimumSize(900, 700)
         self._docker_available = False
         self._cards: dict[str, ContainerCard] = {}
@@ -45,7 +47,7 @@ class DockerManager(QMainWindow):
         layout.setSpacing(16)
 
         title_layout = QVBoxLayout()
-        title = QLabel("Docker 容器管理")
+        title = QLabel("DockerSandbox 容器管理")
         title.setObjectName("titleLabel")
         title_layout.addWidget(title)
         subtitle = QLabel("点击卡片展开/收起详情，操作按钮在卡片右侧")
@@ -60,8 +62,13 @@ class DockerManager(QMainWindow):
         self.btn_create = QPushButton("创建容器")
         self.btn_create.setObjectName("accentButton")
         self.btn_create.clicked.connect(self.open_create_dialog)
+        self.btn_start_docker = QPushButton("启动 Docker")
+        self.btn_start_docker.setObjectName("successButton")
+        self.btn_start_docker.clicked.connect(self._start_docker)
+        self.btn_start_docker.setVisible(False)
         toolbar.addWidget(self.btn_refresh)
         toolbar.addWidget(self.btn_create)
+        toolbar.addWidget(self.btn_start_docker)
         toolbar.addStretch()
         layout.addLayout(toolbar)
 
@@ -89,17 +96,84 @@ class DockerManager(QMainWindow):
             if code == 0:
                 self._docker_available = True
                 self.status_lbl.setText("Docker 已就绪")
+                self.btn_start_docker.setVisible(False)
                 self.refresh_containers()
             else:
                 self._docker_available = False
-                self.status_lbl.setText("Docker 未就绪 - 请检查 Docker Desktop 是否运行")
-                QMessageBox.warning(
-                    self, "Docker 未就绪",
-                    "无法连接到 Docker。请检查:\n\n"
-                    "1. Docker Desktop 是否已安装并正在运行\n"
-                    "2. docker 命令是否已添加到系统 PATH\n\n"
-                    f"错误信息:\n{err.strip() or out.strip()}"
-                )
+                self.status_lbl.setText("Docker 未就绪 - 请点击「启动 Docker」按钮")
+                self.btn_start_docker.setVisible(True)
+        DockerRunner.run(self, ["version", "--format", "{{.Server.Version}}"], on_finish=_on_finish)
+
+    def _start_docker(self):
+        self.status_lbl.setText("正在启动 Docker Desktop...")
+        self.btn_start_docker.setEnabled(False)
+
+        started = False
+        possible_paths = [
+            r"C:\Program Files\Docker\Docker\Docker Desktop.exe",
+            r"C:\Program Files (x86)\Docker\Docker\Docker Desktop.exe",
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                try:
+                    proc = QProcess(self)
+                    proc.start(path)
+                    if proc.waitForStarted(5000):
+                        started = True
+                        log(f"[DOCKER] Started Docker Desktop from {path}")
+                        break
+                except Exception as e:
+                    log(f"[DOCKER] failed to start {path}: {e}")
+
+        if not started:
+            docker_path = shutil.which("docker")
+            if docker_path:
+                try:
+                    proc = QProcess(self)
+                    proc.start(docker_path, ["desktop", "start"])
+                    if proc.waitForStarted(5000):
+                        started = True
+                        log("[DOCKER] Started Docker Desktop via 'docker desktop start'")
+                except Exception as e:
+                    log(f"[DOCKER] docker desktop start failed: {e}")
+
+        if not started:
+            QMessageBox.critical(
+                self, "启动失败",
+                "无法自动启动 Docker Desktop。请检查:\n\n"
+                "1. Docker Desktop 是否已安装\n"
+                "2. 或者尝试手动启动 Docker Desktop\n\n"
+                "您也可以尝试在命令行运行: docker desktop start"
+            )
+            self.btn_start_docker.setEnabled(True)
+            self.status_lbl.setText("Docker 未就绪 - 请点击「启动 Docker」按钮")
+            return
+
+        self._docker_poll_count = 0
+        self._docker_poll_timer = QTimer(self)
+        self._docker_poll_timer.timeout.connect(self._poll_docker_ready)
+        self._docker_poll_timer.start(2000)
+
+    def _poll_docker_ready(self):
+        self._docker_poll_count += 1
+        if self._docker_poll_count > 30:
+            self._docker_poll_timer.stop()
+            QMessageBox.critical(self, "启动超时", "Docker Desktop 启动超时，请手动检查。")
+            self.btn_start_docker.setEnabled(True)
+            self.status_lbl.setText("Docker 未就绪 - 请点击「启动 Docker」按钮")
+            return
+
+        def _on_finish(code, status, out, err):
+            if code == 0:
+                self._docker_poll_timer.stop()
+                self._docker_available = True
+                self.status_lbl.setText("Docker 已就绪")
+                self.btn_start_docker.setVisible(False)
+                self.btn_start_docker.setEnabled(True)
+                self.refresh_containers()
+            else:
+                self.status_lbl.setText(f"正在启动 Docker Desktop... ({self._docker_poll_count * 2}s)")
+
         DockerRunner.run(self, ["version", "--format", "{{.Server.Version}}"], on_finish=_on_finish)
 
     def refresh_containers(self):
@@ -258,6 +332,8 @@ class DockerManager(QMainWindow):
 
     def closeEvent(self, event):
         self._timer.stop()
+        if hasattr(self, '_docker_poll_timer') and self._docker_poll_timer.isActive():
+            self._docker_poll_timer.stop()
         for i in range(self.tabs.count()):
             widget = self.tabs.widget(i)
             if isinstance(widget, TerminalTab):

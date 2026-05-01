@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QApplication
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeyEvent
@@ -55,11 +55,12 @@ class TerminalTab(QWidget):
 
         self.display = TerminalDisplay()
         self.display.key_pressed.connect(self._handle_key)
+        self.display.paste_requested.connect(self._paste)
         self.scroll_area.setWidget(self.display)
         layout.addWidget(self.scroll_area, stretch=1)
 
         # Hint
-        hint = QLabel("提示: 在此区域直接输入命令。支持 Tab 补全、方向键、Ctrl+C 等。")
+        hint = QLabel("提示: 在此区域直接输入命令。支持 Tab 补全、方向键、Ctrl+C、Ctrl+V 粘贴等。")
         hint.setStyleSheet("color: #6c757d; font-size: 11px;")
         layout.addWidget(hint)
 
@@ -84,28 +85,36 @@ class TerminalTab(QWidget):
                 self._session.send_eof()
                 return
             if key == Qt.Key_L:
-                self._session.write('\x0c')
+                self._session.write("\x0c")
                 return
             if key == Qt.Key_U:
-                self._session.write('\x15')
+                self._session.write("\x15")
+                return
+            if key == Qt.Key_V:
+                self._paste()
                 return
             # Ctrl+A to Ctrl+Z
             if Qt.Key_A <= key <= Qt.Key_Z:
                 self._session.send_key(chr(key), ctrl=True)
                 return
 
+        # Shift+Insert = paste
+        if key == Qt.Key_Insert and modifiers & Qt.ShiftModifier:
+            self._paste()
+            return
+
         # Arrow keys
         if key == Qt.Key_Up:
-            self._session.send_arrow('up')
+            self._session.send_arrow("up")
             return
         if key == Qt.Key_Down:
-            self._session.send_arrow('down')
+            self._session.send_arrow("down")
             return
         if key == Qt.Key_Left:
-            self._session.send_arrow('left')
+            self._session.send_arrow("left")
             return
         if key == Qt.Key_Right:
-            self._session.send_arrow('right')
+            self._session.send_arrow("right")
             return
 
         # Special keys
@@ -113,35 +122,40 @@ class TerminalTab(QWidget):
             self._session.send_backspace()
             return
         if key == Qt.Key_Delete:
-            self._session.write('\x1b[3~')
+            self._session.write("\x1b[3~")
             return
         if key == Qt.Key_Home:
-            self._session.write('\x1b[H')
+            self._session.write("\x1b[H")
             return
         if key == Qt.Key_End:
-            self._session.write('\x1b[F')
+            self._session.write("\x1b[F")
             return
         if key == Qt.Key_PageUp:
-            self._session.write('\x1b[5~')
+            self._session.write("\x1b[5~")
             return
         if key == Qt.Key_PageDown:
-            self._session.write('\x1b[6~')
+            self._session.write("\x1b[6~")
             return
         if key == Qt.Key_Tab:
-            self._session.write('\t')
+            self._session.write("\t")
             return
         if key == Qt.Key_Backtab:
-            self._session.write('\t')
+            self._session.write("\t")
             return
         if key == Qt.Key_Enter or key == Qt.Key_Return:
-            self._session.write('\r')
+            self._session.write("\r")
             return
         if key == Qt.Key_Escape:
-            self._session.write('\x1b')
+            self._session.write("\x1b")
             return
 
         # Regular text input
         text = event.text()
+        if text:
+            self._session.write(text)
+
+    def _paste(self):
+        text = QApplication.clipboard().text()
         if text:
             self._session.write(text)
 
