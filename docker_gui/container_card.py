@@ -192,9 +192,18 @@ class ContainerCard(QFrame):
             if not part:
                 continue
             if ":/" in part:
-                idx = part.find(":/")
-                host = part[:idx]
-                container = part[idx + 1:]
+                # Use rsplit so Windows drive letters (e.g. C:/xxx) don't break the split
+                host, container = part.rsplit(":/", 1)
+                container = "/" + container
+                # Normalize Docker Desktop's forward-slash Windows paths back to backslashes
+                # for display, e.g. C:/Users/... → C:\Users\...
+                if (
+                    len(host) >= 3
+                    and host[1] == ":"
+                    and host[0].isalpha()
+                    and host[2] == "/"
+                ):
+                    host = host[0] + ":\\" + host[3:].replace("/", "\\")
                 items.append((host, container))
             else:
                 parts = part.rsplit(":", 1)

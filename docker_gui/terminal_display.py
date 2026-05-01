@@ -70,9 +70,9 @@ class TerminalDisplay(QPlainTextEdit):
                     self._insert_newline()
                     i += 2
                 else:
-                    # Carriage return without newline: start a new line
-                    # (approximate behavior for bash readline reprints)
-                    self._insert_newline()
+                    # Carriage return without newline: bash uses this to
+                    # repaint the current line (move cursor to start of line)
+                    self._carriage_return()
                     i += 1
                 continue
 
@@ -167,6 +167,15 @@ class TerminalDisplay(QPlainTextEdit):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         cursor.insertText("\n", self._current_fmt)
+        self.setTextCursor(cursor)
+
+    def _carriage_return(self):
+        from PySide6.QtGui import QTextCursor
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.movePosition(QTextCursor.MoveOperation.StartOfLine, QTextCursor.MoveMode.MoveAnchor)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfLine, QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
         self.setTextCursor(cursor)
 
     def _backspace(self):
