@@ -9,8 +9,9 @@ wheels/
 # Virtual environments
 .venv
 
-# PyInstaller
-*.spec
+# PyInstaller build artifacts
+build/
+dist/
 
 # Logs
 *.log
