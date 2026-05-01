@@ -40,7 +40,9 @@ uv run pyinstaller DockerGUI.spec --clean -y
 
 构建产物位于 `dist/DockerGUI/DockerGUI.exe`。
 
-> **注意**：项目使用 PyInstaller 的 `onedir` 模式（非单文件），以确保 WinPTY 的 DLL 依赖能被正确加载。
+> **注意**：
+> - 项目使用 PyInstaller 的 `onedir` 模式（非单文件），以确保 WinPTY 的 DLL 依赖能被正确加载。
+> - 构建时 PowerShell 可能显示退出码 1（PyInstaller 的 warning 写入 stderr 所致），只要日志末尾出现 `Build complete!` 即表示构建成功。
 
 ## 使用说明
 
@@ -70,6 +72,8 @@ uv run pyinstaller DockerGUI.spec --clean -y
 ### Windows 路径兼容性
 
 文件挂载使用 `--mount type=bind,source=<主机路径>,target=<容器路径>` 语法，避免 Windows 驱动器盘符（如 `C:\`）被 Docker 的 `-v` 参数误解析为卷名分隔符。
+
+Docker Desktop 在 Windows 上会返回正斜杠格式的路径（如 `C:/Users/...`），应用在显示时会自动将其还原为 Windows 反斜杠格式（`C:\Users\...`）。
 
 ### 项目结构
 
