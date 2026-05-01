@@ -37,12 +37,12 @@ jobs:
         shell: powershell
         run: |
           cd dist
-          Compress-Archive -Path DockerGUI -DestinationPath ../DockerGUI-windows.zip
+          Compress-Archive -Path DockerSandbox -DestinationPath ../DockerSandbox-windows.zip
 
       - name: Create Release and upload asset
         uses: softprops/action-gh-release@v2
         with:
-          files: DockerGUI-windows.zip
+          files: DockerSandbox-windows.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
