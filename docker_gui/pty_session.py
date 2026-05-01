@@ -1,8 +1,18 @@
-import select
+import os
+import shutil
+import sys
 import threading
+import time
 from PySide6.QtCore import QObject, Signal
-from winpty import PtyProcess
+from winpty import PTY, Backend
 from .logger import log
+
+# Ensure PyInstaller onefile temp dir is in PATH so winpty.dll can be found
+if hasattr(sys, "_MEIPASS"):
+    _meipass = sys._MEIPASS
+    if _meipass not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _meipass + os.pathsep + os.environ.get("PATH", "")
+        log(f"[PTY] Added MEIPASS to PATH: {_meipass}")
 
 
 class PtySession(QObject):
@@ -12,7 +22,7 @@ class PtySession(QObject):
     def __init__(self, container_name: str, parent=None):
         super().__init__(parent)
         self.container_name = container_name
-        self._proc: PtyProcess | None = None
+        self._proc: PTY | None = None
         self._running = False
         self._reader_thread: threading.Thread | None = None
         self._shell_attempt = "bash"
@@ -20,13 +30,25 @@ class PtySession(QObject):
     def start(self):
         self._running = True
         try:
-            self._proc = PtyProcess.spawn(
-                ["docker", "exec", "-it", self.container_name, self._shell_attempt, "-l"],
-                dimensions=(24, 120)
+            docker_path = shutil.which("docker")
+            if not docker_path:
+                raise FileNotFoundError("docker command not found in PATH")
+
+            # Build full cmdline including a dummy executable name as argv[0]
+            # WinPTY requires argv[0] in cmdline; docker ignores it
+            cmdline = (
+                f"docker.exe exec -i -t "
+                f"{self.container_name} {self._shell_attempt} -l"
             )
-            log(f"[PTY] started {self._shell_attempt} in {self.container_name}")
+
+            self._proc = PTY(120, 24, backend=Backend.WinPTY)
+            self._proc.spawn(docker_path, cmdline=cmdline)
+            log(f"[PTY] started {self._shell_attempt} in {self.container_name} (WinPTY)")
+            log(f"[PTY] cmdline: {cmdline}")
         except Exception as e:
-            log(f"[PTY] spawn error: {e}")
+            import traceback as _tb
+            err_detail = _tb.format_exc()
+            log(f"[PTY] spawn error: {e}\n{err_detail}")
             if self._shell_attempt == "bash":
                 self._shell_attempt = "sh"
                 self.start()
@@ -41,23 +63,18 @@ class PtySession(QObject):
     def _read_loop(self):
         while self._running and self._proc and self._proc.isalive():
             try:
-                fd = self._proc.fd
-                ready, _, _ = select.select([fd], [], [], 0.1)
-                if ready:
-                    data = self._proc.read(4096)
-                    if data:
-                        self.output_received.emit(data)
-            except (EOFError, OSError):
-                break
+                data = self._proc.read(blocking=False)
+                if data:
+                    self.output_received.emit(data)
             except Exception as e:
                 log(f"[PTY] read error: {e}")
-                self.output_received.emit(f"\n[读取错误: {e}]\n")
                 break
+            time.sleep(0.05)
 
         code = 0
         if self._proc:
             try:
-                code = self._proc.wait() or 0
+                code = self._proc.get_exitstatus() or 0
             except Exception:
                 pass
         log(f"[PTY] session closed with code {code}")
@@ -108,9 +125,3 @@ class PtySession(QObject):
 
     def stop(self):
         self._running = False
-        if self._proc and self._proc.isalive():
-            try:
-                self._proc.terminate()
-                self._proc.close()
-            except Exception as e:
-                log(f"[PTY] stop error: {e}")

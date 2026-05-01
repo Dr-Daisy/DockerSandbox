@@ -55,7 +55,6 @@ class TerminalTab(QWidget):
 
         self.display = TerminalDisplay()
         self.display.key_pressed.connect(self._handle_key)
-        self.display.content_size_changed.connect(self._scroll_to_bottom)
         self.scroll_area.setWidget(self.display)
         layout.addWidget(self.scroll_area, stretch=1)
 
@@ -67,8 +66,10 @@ class TerminalTab(QWidget):
         self.display.setFocus()
 
     def _scroll_to_bottom(self):
-        scrollbar = self.scroll_area.verticalScrollBar()
-        scrollbar.setValue(scrollbar.maximum())
+        vbar = self.scroll_area.verticalScrollBar()
+        vbar.setValue(vbar.maximum())
+        hbar = self.scroll_area.horizontalScrollBar()
+        hbar.setValue(0)
 
     def _handle_key(self, event: QKeyEvent):
         key = event.key()
@@ -146,7 +147,6 @@ class TerminalTab(QWidget):
 
     def _on_output(self, data: str):
         self.display.feed(data)
-        # Defer scroll to allow layout to update
         self._scroll_timer.start(10)
 
     def _on_session_closed(self, code: int):
@@ -162,6 +162,9 @@ class TerminalTab(QWidget):
 
     def _clear_screen(self):
         self.display.clear_screen()
+
+    def focusNextPrevChild(self, next):
+        return False
 
     def closeEvent(self, event):
         self._scroll_timer.stop()
