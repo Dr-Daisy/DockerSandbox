@@ -1,6 +1,6 @@
 import re
 from PySide6.QtWidgets import QPlainTextEdit, QApplication, QMenu
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QTextCharFormat, QColor, QKeyEvent, QTextCursor
 from .ansi_parser import apply_sgr
 
@@ -11,6 +11,7 @@ _MAX_SCROLLBACK = 5000
 class TerminalDisplay(QPlainTextEdit):
     key_pressed = Signal(QKeyEvent)
     paste_requested = Signal()
+    size_changed = Signal(int, int)  # cols, rows
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -18,6 +19,8 @@ class TerminalDisplay(QPlainTextEdit):
         self.setFocusPolicy(Qt.StrongFocus)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.setCenterOnScroll(False)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setCursorWidth(8)
         self._font = QFont("Consolas", 11)
         self._font.setStyleHint(QFont.Monospace)
         self.setFont(self._font)
@@ -42,6 +45,12 @@ class TerminalDisplay(QPlainTextEdit):
         self._cursor_col = 0
         self._saved_lines = None
         self._saved_cursor = None
+        self._cursor_visible = True
+
+        # Debounced resize timer
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._emit_size)
 
     # ---------- Public API ----------
     def feed(self, data: str):
@@ -53,6 +62,26 @@ class TerminalDisplay(QPlainTextEdit):
         self._cursor_row = 0
         self._cursor_col = 0
         self._render()
+
+    # ---------- Size synchronization ----------
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._resize_timer.start(200)
+
+    def _emit_size(self):
+        cols, rows = self._compute_size()
+        self.size_changed.emit(cols, rows)
+
+    def _compute_size(self) -> tuple[int, int]:
+        fm = self.fontMetrics()
+        char_width = fm.horizontalAdvance("M")
+        line_height = fm.lineSpacing()
+        # Account for stylesheet padding (12px each side)
+        pad_h = 24
+        pad_v = 24
+        cols = max(1, (self.viewport().width() - pad_h) // char_width)
+        rows = max(1, (self.viewport().height() - pad_v) // line_height)
+        return cols, rows
 
     # ---------- Screen buffer ----------
     def _put_char(self, ch: str):
@@ -273,6 +302,12 @@ class TerminalDisplay(QPlainTextEdit):
             elif seq == "?1049" and cmd == "l":
                 self._restore_screen()
                 self._render()
+            elif seq == "?25" and cmd == "h":
+                self._cursor_visible = True
+                self.setCursorWidth(8)
+            elif seq == "?25" and cmd == "l":
+                self._cursor_visible = False
+                self.setCursorWidth(0)
 
     # ---------- Context menu ----------
     def contextMenuEvent(self, event):
@@ -305,6 +340,13 @@ class TerminalDisplay(QPlainTextEdit):
 
     def _request_paste(self):
         self.paste_requested.emit()
+
+    # ---------- Mouse ----------
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        # Keep the visual cursor at the terminal logical position
+        # after the user finishes text selection.
+        self._update_document_cursor()
 
     # ---------- Events ----------
     def focusNextPrevChild(self, next):

@@ -56,6 +56,7 @@ class TerminalTab(QWidget):
         self.display = TerminalDisplay()
         self.display.key_pressed.connect(self._handle_key)
         self.display.paste_requested.connect(self._paste)
+        self.display.size_changed.connect(self._on_size_changed)
         self.scroll_area.setWidget(self.display)
         layout.addWidget(self.scroll_area, stretch=1)
 
@@ -153,6 +154,9 @@ class TerminalTab(QWidget):
         text = event.text()
         if text:
             self._session.write(text)
+
+    def _on_size_changed(self, cols: int, rows: int):
+        self._session.resize(cols, rows)
 
     def _paste(self):
         text = QApplication.clipboard().text()

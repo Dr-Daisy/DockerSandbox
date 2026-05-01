@@ -143,6 +143,14 @@ class PtySession(QObject):
     def send_eof(self):
         self.write("\x04")
 
+    def resize(self, cols: int, rows: int):
+        if self._proc and self._proc.isalive():
+            try:
+                self._proc.set_size(cols, rows)
+                log(f"[PTY] resized to {cols}x{rows}")
+            except Exception as e:
+                log(f"[PTY] resize error: {e}")
+
     def stop(self):
         self._running = False
         if self._proc:
