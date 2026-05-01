@@ -100,13 +100,17 @@ class TerminalDisplay(QPlainTextEdit):
 
     def paintEvent(self, event):
         super().paintEvent(event)
-        if not self._cursor_visible or not self._cursor_blink_on:
-            return
-        rect = self._cursor_rect()
-        if rect.isValid():
-            painter = QPainter(self.viewport())
-            painter.fillRect(rect, QColor("#e0e0e0"))
-            painter.end()
+        painter = QPainter(self.viewport())
+        # 擦除 Qt 默认细 caret（无论 blink 状态都覆盖，确保完全不可见）
+        qt_rect = self.cursorRect(self.textCursor())
+        if qt_rect.isValid() and qt_rect.width() > 0:
+            painter.fillRect(qt_rect, QColor("#1e1e1e"))
+        # 绘制自定义块光标
+        if self._cursor_visible and self._cursor_blink_on:
+            rect = self._cursor_rect()
+            if rect.isValid():
+                painter.fillRect(rect, QColor("#e0e0e0"))
+        painter.end()
 
     # ---------- IME ----------
     def inputMethodEvent(self, event: QInputMethodEvent):
