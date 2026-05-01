@@ -1,7 +1,10 @@
 import re
 from PySide6.QtWidgets import QPlainTextEdit, QApplication, QMenu
-from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QFont, QTextCharFormat, QColor, QKeyEvent, QTextCursor
+from PySide6.QtCore import Qt, Signal, QTimer, QRect
+from PySide6.QtGui import (
+    QFont, QTextCharFormat, QColor, QKeyEvent, QTextCursor,
+    QPainter, QInputMethodEvent
+)
 from .ansi_parser import apply_sgr
 
 _ANSI_SEQ_RE = re.compile(r"\x1b\[([0-9;?]*)([A-Za-z])")
@@ -11,19 +14,21 @@ _MAX_SCROLLBACK = 5000
 class TerminalDisplay(QPlainTextEdit):
     key_pressed = Signal(QKeyEvent)
     paste_requested = Signal()
-    size_changed = Signal(int, int)  # cols, rows
+    text_input = Signal(str)          # 输入法提交的中文文本
+    size_changed = Signal(int, int)   # cols, rows
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setReadOnly(True)
+        # 必须为非只读才能激活输入法；所有文本插入由我们自己控制
+        self.setReadOnly(False)
         self.setFocusPolicy(Qt.StrongFocus)
         self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.setCenterOnScroll(False)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setCursorWidth(8)
         self._font = QFont("Consolas", 11)
         self._font.setStyleHint(QFont.Monospace)
         self.setFont(self._font)
+        # caret-color: transparent 隐藏 Qt 默认细光标，仅保留自定义块光标
         self.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #1e1e1e;
@@ -33,6 +38,7 @@ class TerminalDisplay(QPlainTextEdit):
                 padding: 12px;
                 selection-background-color: #264f78;
                 selection-color: #ffffff;
+                caret-color: transparent;
             }
         """)
         self._default_fmt = QTextCharFormat()
@@ -46,8 +52,14 @@ class TerminalDisplay(QPlainTextEdit):
         self._saved_lines = None
         self._saved_cursor = None
         self._cursor_visible = True
+        self._cursor_blink_on = True
 
-        # Debounced resize timer
+        # 光标闪烁定时器 (~530ms 周期)
+        self._blink_timer = QTimer(self)
+        self._blink_timer.timeout.connect(self._blink_cursor)
+        self._blink_timer.start(530)
+
+        # 防抖 resize 定时器
         self._resize_timer = QTimer(self)
         self._resize_timer.setSingleShot(True)
         self._resize_timer.timeout.connect(self._emit_size)
@@ -63,6 +75,52 @@ class TerminalDisplay(QPlainTextEdit):
         self._cursor_col = 0
         self._render()
 
+    # ---------- Custom cursor painting ----------
+    def _blink_cursor(self):
+        self._cursor_blink_on = not self._cursor_blink_on
+        if self._cursor_visible:
+            self.viewport().update()
+
+    def _cursor_rect(self) -> QRect:
+        doc = self.document()
+        block = doc.findBlockByLineNumber(self._cursor_row)
+        if not block.isValid():
+            block = doc.lastBlock()
+        if not block.isValid():
+            return QRect()
+        cursor = QTextCursor(block)
+        pos_in_block = min(self._cursor_col, max(0, block.length() - 1))
+        cursor.setPosition(block.position() + pos_in_block)
+        rect = self.cursorRect(cursor)
+        if rect.width() <= 1:
+            rect.setWidth(self.fontMetrics().horizontalAdvance("M"))
+        if rect.height() <= 1:
+            rect.setHeight(self.fontMetrics().height())
+        return rect
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if not self._cursor_visible or not self._cursor_blink_on:
+            return
+        rect = self._cursor_rect()
+        if rect.isValid():
+            painter = QPainter(self.viewport())
+            painter.fillRect(rect, QColor("#e0e0e0"))
+            painter.end()
+
+    # ---------- IME ----------
+    def inputMethodEvent(self, event: QInputMethodEvent):
+        if event.commitString():
+            self.text_input.emit(event.commitString())
+        # 不调用 super，防止 Qt 将预编辑/提交文本插入文档
+
+    def inputMethodQuery(self, query: Qt.InputMethodQuery):
+        if query == Qt.InputMethodQuery.ImCursorRectangle:
+            rect = self._cursor_rect()
+            rect.translate(self.viewport().pos())
+            return rect
+        return super().inputMethodQuery(query)
+
     # ---------- Size synchronization ----------
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -76,7 +134,6 @@ class TerminalDisplay(QPlainTextEdit):
         fm = self.fontMetrics()
         char_width = fm.horizontalAdvance("M")
         line_height = fm.lineSpacing()
-        # Account for stylesheet padding (12px each side)
         pad_h = 24
         pad_v = 24
         cols = max(1, (self.viewport().width() - pad_h) // char_width)
@@ -145,6 +202,46 @@ class TerminalDisplay(QPlainTextEdit):
         elif mode == 2:
             self._lines[self._cursor_row] = []
 
+    def _insert_chars(self, n: int):
+        if self._cursor_row >= len(self._lines):
+            return
+        line = self._lines[self._cursor_row]
+        spaces = [(" ", QTextCharFormat(self._default_fmt))] * n
+        self._lines[self._cursor_row] = line[: self._cursor_col] + spaces + line[self._cursor_col :]
+
+    def _delete_chars(self, n: int):
+        if self._cursor_row >= len(self._lines):
+            return
+        line = self._lines[self._cursor_row]
+        self._lines[self._cursor_row] = line[: self._cursor_col] + line[self._cursor_col + n :]
+
+    def _erase_chars(self, n: int):
+        if self._cursor_row >= len(self._lines):
+            return
+        line = self._lines[self._cursor_row]
+        spaces = [(" ", QTextCharFormat(self._default_fmt))] * n
+        self._lines[self._cursor_row] = line[: self._cursor_col] + spaces + line[self._cursor_col + n :]
+
+    def _insert_lines(self, n: int):
+        while len(self._lines) <= self._cursor_row:
+            self._lines.append([])
+        empty = [[] for _ in range(n)]
+        self._lines = self._lines[: self._cursor_row] + empty + self._lines[self._cursor_row :]
+
+    def _delete_lines(self, n: int):
+        if self._cursor_row < len(self._lines):
+            self._lines = self._lines[: self._cursor_row] + self._lines[self._cursor_row + n :]
+        if not self._lines:
+            self._lines = [[]]
+
+    def _scroll_up(self, n: int):
+        n = min(n, len(self._lines))
+        self._lines = self._lines[n:] + [[] for _ in range(n)]
+
+    def _scroll_down(self, n: int):
+        n = min(n, len(self._lines))
+        self._lines = [[] for _ in range(n)] + self._lines[:-n]
+
     def _save_screen(self):
         self._saved_lines = [list(line) for line in self._lines]
         self._saved_cursor = (self._cursor_row, self._cursor_col)
@@ -159,7 +256,6 @@ class TerminalDisplay(QPlainTextEdit):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         for i, line in enumerate(self._lines):
-            # Trim trailing spaces for display
             while line and line[-1][0] == " ":
                 line = line[:-1]
             if i > 0:
@@ -178,7 +274,7 @@ class TerminalDisplay(QPlainTextEdit):
         pos = 0
         row = min(self._cursor_row, len(self._lines) - 1) if self._lines else 0
         for i in range(row):
-            pos += len(self._lines[i]) + 1  # +1 for block separator
+            pos += len(self._lines[i]) + 1
         if row < len(self._lines):
             pos += min(self._cursor_col, len(self._lines[row]))
         cursor = self.textCursor()
@@ -196,9 +292,8 @@ class TerminalDisplay(QPlainTextEdit):
                 if consumed > 0:
                     i += consumed
                     continue
-                self._put_char(ch)
-                i += 1
-                continue
+                # 不完整的转义序列，保留到下一次 feed
+                break
             if ch == "\r":
                 if i + 1 < len(data) and data[i + 1] == "\n":
                     self._line_feed()
@@ -221,12 +316,12 @@ class TerminalDisplay(QPlainTextEdit):
                     self._put_char(" ")
                 i += 1
                 continue
-            if ch == "\x07":  # BEL
+            if ch == "\x07":
                 i += 1
                 continue
             self._put_char(ch)
             i += 1
-        self._pending = ""
+        self._pending = data[i:]
         self._render()
         self._update_document_cursor()
         self.ensureCursorVisible()
@@ -243,7 +338,7 @@ class TerminalDisplay(QPlainTextEdit):
                     cmd = c
                     self._handle_ansi(seq, cmd)
                     return True, i - start + 1
-                if c in "0123456789;?:":
+                if c in "0123456789;?: ":
                     i += 1
                 else:
                     return False, 0
@@ -295,6 +390,47 @@ class TerminalDisplay(QPlainTextEdit):
         elif cmd == "D":
             n = params[0] if params else 1
             self._cursor_col = max(0, self._cursor_col - n)
+        elif cmd == "G":  # CHA
+            col = params[0] if params else 1
+            self._cursor_col = max(0, col - 1)
+        elif cmd == "d":  # VPA
+            row = params[0] if params else 1
+            self._cursor_row = max(0, row - 1)
+            while len(self._lines) <= self._cursor_row:
+                self._lines.append([])
+        elif cmd == "E":  # CNL
+            n = params[0] if params else 1
+            self._cursor_row += n
+            self._cursor_col = 0
+            while len(self._lines) <= self._cursor_row:
+                self._lines.append([])
+        elif cmd == "F":  # CPL
+            n = params[0] if params else 1
+            self._cursor_row = max(0, self._cursor_row - n)
+            self._cursor_col = 0
+        elif cmd == "@":  # ICH
+            n = params[0] if params else 1
+            self._insert_chars(n)
+        elif cmd == "P":  # DCH
+            n = params[0] if params else 1
+            self._delete_chars(n)
+        elif cmd == "X":  # ECH
+            n = params[0] if params else 1
+            self._erase_chars(n)
+        elif cmd == "L":  # IL
+            n = params[0] if params else 1
+            self._insert_lines(n)
+        elif cmd == "M":  # DL
+            n = params[0] if params else 1
+            self._delete_lines(n)
+        elif cmd == "S":  # SU
+            n = params[0] if params else 1
+            self._scroll_up(n)
+        elif cmd == "T":  # SD
+            n = params[0] if params else 1
+            self._scroll_down(n)
+        elif cmd == "q":  # DECSCUSR
+            pass
         elif cmd in ("h", "l"):
             if seq == "?1049" and cmd == "h":
                 self._save_screen()
@@ -304,10 +440,10 @@ class TerminalDisplay(QPlainTextEdit):
                 self._render()
             elif seq == "?25" and cmd == "h":
                 self._cursor_visible = True
-                self.setCursorWidth(8)
+                self.viewport().update()
             elif seq == "?25" and cmd == "l":
                 self._cursor_visible = False
-                self.setCursorWidth(0)
+                self.viewport().update()
 
     # ---------- Context menu ----------
     def contextMenuEvent(self, event):
@@ -342,10 +478,12 @@ class TerminalDisplay(QPlainTextEdit):
         self.paste_requested.emit()
 
     # ---------- Mouse ----------
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self._update_document_cursor()
+
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
-        # Keep the visual cursor at the terminal logical position
-        # after the user finishes text selection.
         self._update_document_cursor()
 
     # ---------- Events ----------
@@ -364,4 +502,4 @@ class TerminalDisplay(QPlainTextEdit):
 
     def keyPressEvent(self, event: QKeyEvent):
         self.key_pressed.emit(event)
-        event.accept()
+        # 不调用 super，防止 Qt 将按键文本插入文档

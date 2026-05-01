@@ -20,6 +20,9 @@ class TerminalTab(QWidget):
         self._setup_ui()
         self._session.start()
 
+        # 延迟同步初始尺寸，确保 Qt 布局已稳定
+        QTimer.singleShot(300, self._sync_initial_size)
+
         # Auto-scroll to bottom when content changes
         self._scroll_timer = QTimer(self)
         self._scroll_timer.setSingleShot(True)
@@ -56,6 +59,7 @@ class TerminalTab(QWidget):
         self.display = TerminalDisplay()
         self.display.key_pressed.connect(self._handle_key)
         self.display.paste_requested.connect(self._paste)
+        self.display.text_input.connect(self._on_text_input)
         self.display.size_changed.connect(self._on_size_changed)
         self.scroll_area.setWidget(self.display)
         layout.addWidget(self.scroll_area, stretch=1)
@@ -155,8 +159,16 @@ class TerminalTab(QWidget):
         if text:
             self._session.write(text)
 
+    def _sync_initial_size(self):
+        cols, rows = self.display._compute_size()
+        if cols > 1 and rows > 1:
+            self._session.resize(cols, rows)
+
     def _on_size_changed(self, cols: int, rows: int):
         self._session.resize(cols, rows)
+
+    def _on_text_input(self, text: str):
+        self._session.write(text)
 
     def _paste(self):
         text = QApplication.clipboard().text()
