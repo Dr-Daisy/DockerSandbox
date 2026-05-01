@@ -2,8 +2,7 @@ import re
 from PySide6.QtWidgets import QPlainTextEdit, QApplication, QMenu
 from PySide6.QtCore import Qt, Signal, QTimer, QRect
 from PySide6.QtGui import (
-    QFont, QTextCharFormat, QColor, QKeyEvent, QTextCursor,
-    QPainter, QInputMethodEvent
+    QFont, QTextCharFormat, QColor, QKeyEvent, QTextCursor
 )
 from .ansi_parser import apply_sgr
 
@@ -28,7 +27,6 @@ class TerminalDisplay(QPlainTextEdit):
         self._font = QFont("Consolas", 11)
         self._font.setStyleHint(QFont.Monospace)
         self.setFont(self._font)
-        # caret-color: transparent 隐藏 Qt 默认细光标，仅保留自定义块光标
         self.setStyleSheet("""
             QPlainTextEdit {
                 background-color: #1e1e1e;
@@ -38,7 +36,6 @@ class TerminalDisplay(QPlainTextEdit):
                 padding: 12px;
                 selection-background-color: #264f78;
                 selection-color: #ffffff;
-                caret-color: transparent;
             }
         """)
         self._default_fmt = QTextCharFormat()
@@ -51,13 +48,6 @@ class TerminalDisplay(QPlainTextEdit):
         self._cursor_col = 0
         self._saved_lines = None
         self._saved_cursor = None
-        self._cursor_visible = True
-        self._cursor_blink_on = True
-
-        # 光标闪烁定时器 (~530ms 周期)
-        self._blink_timer = QTimer(self)
-        self._blink_timer.timeout.connect(self._blink_cursor)
-        self._blink_timer.start(530)
 
         # 防抖 resize 定时器
         self._resize_timer = QTimer(self)
@@ -75,11 +65,22 @@ class TerminalDisplay(QPlainTextEdit):
         self._cursor_col = 0
         self._render()
 
-    # ---------- Custom cursor painting ----------
-    def _blink_cursor(self):
-        self._cursor_blink_on = not self._cursor_blink_on
-        if self._cursor_visible:
-            self.viewport().update()
+    # ---------- IME ----------
+    def inputMethodEvent(self, event):
+        from PySide6.QtGui import QInputMethodEvent
+        if event.commitString():
+            self.text_input.emit(event.commitString())
+        # 不调用 super，防止 Qt 将预编辑/提交文本插入文档
+
+    def inputMethodQuery(self, query: Qt.InputMethodQuery):
+        if query == Qt.InputMethodQuery.ImCursorRectangle:
+            # 用户手动选择了文本时，让输入法跟随 Qt 默认 cursor 位置
+            if self.textCursor().hasSelection():
+                return super().inputMethodQuery(query)
+            rect = self._cursor_rect()
+            rect.translate(self.viewport().pos())
+            return rect
+        return super().inputMethodQuery(query)
 
     def _cursor_rect(self) -> QRect:
         doc = self.document()
@@ -97,33 +98,6 @@ class TerminalDisplay(QPlainTextEdit):
         if rect.height() <= 1:
             rect.setHeight(self.fontMetrics().height())
         return rect
-
-    def paintEvent(self, event):
-        super().paintEvent(event)
-        painter = QPainter(self.viewport())
-        # 擦除 Qt 默认细 caret（无论 blink 状态都覆盖，确保完全不可见）
-        qt_rect = self.cursorRect(self.textCursor())
-        if qt_rect.isValid() and qt_rect.width() > 0:
-            painter.fillRect(qt_rect, QColor("#1e1e1e"))
-        # 绘制自定义块光标
-        if self._cursor_visible and self._cursor_blink_on:
-            rect = self._cursor_rect()
-            if rect.isValid():
-                painter.fillRect(rect, QColor("#e0e0e0"))
-        painter.end()
-
-    # ---------- IME ----------
-    def inputMethodEvent(self, event: QInputMethodEvent):
-        if event.commitString():
-            self.text_input.emit(event.commitString())
-        # 不调用 super，防止 Qt 将预编辑/提交文本插入文档
-
-    def inputMethodQuery(self, query: Qt.InputMethodQuery):
-        if query == Qt.InputMethodQuery.ImCursorRectangle:
-            rect = self._cursor_rect()
-            rect.translate(self.viewport().pos())
-            return rect
-        return super().inputMethodQuery(query)
 
     # ---------- Size synchronization ----------
     def resizeEvent(self, event):
@@ -260,8 +234,6 @@ class TerminalDisplay(QPlainTextEdit):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         for i, line in enumerate(self._lines):
-            while line and line[-1][0] == " ":
-                line = line[:-1]
             if i > 0:
                 cursor.insertBlock()
             j = 0
@@ -275,6 +247,9 @@ class TerminalDisplay(QPlainTextEdit):
         self.setTextCursor(cursor)
 
     def _update_document_cursor(self):
+        # 用户正在选择文本时，不强制跳回逻辑光标位置
+        if self.textCursor().hasSelection():
+            return
         pos = 0
         row = min(self._cursor_row, len(self._lines) - 1) if self._lines else 0
         for i in range(row):
@@ -443,11 +418,9 @@ class TerminalDisplay(QPlainTextEdit):
                 self._restore_screen()
                 self._render()
             elif seq == "?25" and cmd == "h":
-                self._cursor_visible = True
-                self.viewport().update()
+                self.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
             elif seq == "?25" and cmd == "l":
-                self._cursor_visible = False
-                self.viewport().update()
+                self.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
 
     # ---------- Context menu ----------
     def contextMenuEvent(self, event):
@@ -474,21 +447,15 @@ class TerminalDisplay(QPlainTextEdit):
                 margin: 4px 8px;
             }
         """)
+        if self.textCursor().hasSelection():
+            copy_action = menu.addAction("复制")
+            copy_action.triggered.connect(self.copy)
         paste_action = menu.addAction("粘贴")
         paste_action.triggered.connect(self._request_paste)
         menu.exec(event.globalPos())
 
     def _request_paste(self):
         self.paste_requested.emit()
-
-    # ---------- Mouse ----------
-    def mousePressEvent(self, event):
-        super().mousePressEvent(event)
-        self._update_document_cursor()
-
-    def mouseReleaseEvent(self, event):
-        super().mouseReleaseEvent(event)
-        self._update_document_cursor()
 
     # ---------- Events ----------
     def focusNextPrevChild(self, next):
